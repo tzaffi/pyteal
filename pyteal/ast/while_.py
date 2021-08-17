@@ -36,9 +36,28 @@ class While(Expr):
             raise TealCompileError("While expression must have a doBlock", self)
 
         condStart, condEnd = self.cond.__teal__(options)
+
+        # TODO: set currentLoop, breakBlocks, and continueBlocks to None in the constructor for CompileOptions
+
+        prevLoop = options.currentLoop
+        options.currentLoop = self
+
+        # these contain TealSimpleBlocks that represent the "end" of break/continue statements
+        options.breakBlocks = []
+        options.continueBlocks = []
+        # TODO: save and restore these lists after executing the next line
+
         doStart, doEnd = self.doBlock.__teal__(options)
 
+        options.currentLoop = prevLoop
+
         end = TealSimpleBlock([])
+
+        for block in options.breakBlocks:
+            block.setNext(end)
+        
+        for block in options.continueBlocks:
+            block.setNext(doStart)
 
         if self.step:
             stepStart, stepEnd = self.step.__teal__(options)
