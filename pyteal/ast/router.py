@@ -686,7 +686,7 @@ class Router:
             return wrap
         return wrap(func)
 
-    def contract_construct(self) -> sdk_abi.Contract:
+    def contract_construct(self, canonical: bool = False) -> sdk_abi.Contract:
         """A helper function in constructing a `Contract` object.
 
         It takes out the method spec from approval program methods,
@@ -696,9 +696,13 @@ class Router:
             A Python SDK `Contract` object constructed from the registered methods on this router.
         """
 
-        return sdk_abi.Contract(self.name, self.methods, self.descr)
+        return sdk_abi.Contract(
+            self.name, self.methods, self.descr, canonical=canonical
+        )
 
-    def build_program(self) -> tuple[Expr, Expr, sdk_abi.Contract]:
+    def build_program(
+        self, canonical_contract: bool = False
+    ) -> tuple[Expr, Expr, sdk_abi.Contract]:
         """
         Constructs ASTs for approval and clear-state programs from the registered methods and bare
         app calls in the router, and also generates a Contract object to allow client read and call
@@ -717,7 +721,7 @@ class Router:
         return (
             self.approval_ast.program_construction(),
             self.clear_state_ast.program_construction(),
-            self.contract_construct(),
+            self.contract_construct(canonical=canonical_contract),
         )
 
     def compile_program(
@@ -726,6 +730,7 @@ class Router:
         version: int = DEFAULT_TEAL_VERSION,
         assemble_constants: bool = False,
         optimize: OptimizeOptions = None,
+        canonical_contract: bool = False,
     ) -> tuple[str, str, sdk_abi.Contract]:
         """
         Constructs and compiles approval and clear-state programs from the registered methods and
@@ -744,7 +749,7 @@ class Router:
             * clear_state_program: compiled clear-state program string
             * contract: a Python SDK Contract object to allow clients to make off-chain calls
         """
-        ap, csp, contract = self.build_program()
+        ap, csp, contract = self.build_program(canonical_contract=canonical_contract)
         ap_compiled = compileTeal(
             ap,
             Mode.Application,
