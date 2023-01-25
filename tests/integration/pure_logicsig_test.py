@@ -1,16 +1,19 @@
 from itertools import product
 from os import environ
 from pathlib import Path
-
 import pytest
-from graviton.blackbox import DryRunExecutor as Executor
-from graviton.blackbox import DryRunInspector as Inspector
-from graviton.blackbox import DryRunProperty as DRProp
-from graviton.invariant import Invariant
+
+from pyteal import compileTeal, Mode
 
 import examples.signature.factorizer_game as factorizer
-from pyteal import Mode, compileTeal
-from pyteal.util import algod_with_assertion
+
+from tests.blackbox import algod_with_assertion
+from graviton.blackbox import (
+    DryRunExecutor as Executor,
+    DryRunInspector as Inspector,
+    DryRunProperty as DRProp,
+)
+from graviton.invariant import Invariant
 
 REPORTS_DIR = Path.cwd() / "tests" / "integration" / "reports"
 ALGOD = algod_with_assertion()
@@ -102,7 +105,7 @@ def factorizer_game_check(a: int, p: int, q: int, M: int, N: int):
         lambda args: bool(payment_amount(*args)),
         name=f"passing invariant for coeffs {a, p, q}",
     )
-    passing_invariant.validates(DRProp.passed, inspectors)
+    passing_invariant.validates(DRProp.passed, inputs, inspectors)
 
     print(
         f"validate procedurally that payment amount as expected for (a,p,q) = {a,p,q} over {M, N} dry-rundry-run calls"

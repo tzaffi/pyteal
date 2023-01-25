@@ -1,14 +1,20 @@
+from typing import Callable, Generic, Sequence, TypeVar, cast
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, Sequence, TypeVar, cast
 
 import algosdk.abi
-from graviton.blackbox import DryRunExecutor, DryRunInspector
-from graviton.models import ExecutionMode, PyTypes
+from algosdk.v2client import algod
+
+from graviton import blackbox
+from graviton.blackbox import DryRunInspector, DryRunExecutor
+
+from pyteal.ast.subroutine import OutputKwArgInfo
 
 from pyteal import (
+    abi,
     Arg,
     Btoi,
     Bytes,
+    compileTeal,
     Expr,
     Int,
     Itob,
@@ -21,11 +27,25 @@ from pyteal import (
     SubroutineFnWrapper,
     TealType,
     Txn,
-    abi,
-    compileTeal,
 )
-from pyteal.ast.subroutine import ABIReturnSubroutine, OutputKwArgInfo
-from pyteal.util import algod_with_assertion
+
+from pyteal.ast.subroutine import ABIReturnSubroutine
+
+# ---- Clients ---- #
+
+
+def algod_with_assertion():
+    algod = _algod_client()
+    assert algod.status(), "algod.status() did not produce any results"
+    return algod
+
+
+def _algod_client(
+    algod_address="http://localhost:4001", algod_token="a" * 64
+) -> algod.AlgodClient:
+    """Instantiate and return Algod client object."""
+    return algod.AlgodClient(algod_token, algod_address)
+
 
 # ---- Decorator ---- #
 
@@ -123,14 +143,8 @@ Lazy = Callable[[], Output]
 
 @dataclass(frozen=True)
 class _MatchMode(Generic[Output]):
-    runner: "PyTealDryRunExecutor | None"
     app_case: Lazy
     signature_case: Lazy
-    trace: Any = None
-
-    def __post_init__(self):
-        if self.runner and self.trace:
-            self.runner.add_trace(self.trace)
 
     def __call__(self, mode: Mode, *args, **kwargs) -> Output:
         match mode:
@@ -142,11 +156,10 @@ class _MatchMode(Generic[Output]):
                 raise Exception(f"Unknown mode {mode} of type {type(mode)}")
 
 
-def mode_to_execution_mode(mode: Mode) -> ExecutionMode:
+def mode_to_execution_mode(mode: Mode) -> blackbox.ExecutionMode:
     return _MatchMode(
-        runner=None,
-        app_case=lambda: ExecutionMode.Application,
-        signature_case=lambda: ExecutionMode.Signature,
+        app_case=lambda: blackbox.ExecutionMode.Application,
+        signature_case=lambda: blackbox.ExecutionMode.Signature,
     )(mode)
 
 
@@ -178,29 +191,8 @@ class PyTealDryRunExecutor:
 
         self._pyteal_lambda: Callable[..., Expr] = approval
 
-        self.traces: list = []
-
-    def add_trace(self, trace: Any) -> None:
-        self.traces.append(trace)
-
     def is_abi(self) -> bool:
         return isinstance(self.subr.subroutine, ABIReturnSubroutine)
-
-    def abi_method_signature(self) -> None | str:
-        if self.is_abi():
-            return cast(ABIReturnSubroutine, self.subr.subroutine).method_signature()
-
-        # create an artificial method signature
-        # based on the `abi_argument_types()` and `abi_return_type()`
-        if arg_types := self.abi_argument_types():
-            if all(t is None for t in arg_types):
-                return None
-
-            ret_type = self.abi_return_type()
-            ret = str(ret_type) if ret_type else "void"
-            return f"ptdre_foo({','.join(map(str, arg_types))}){ret}"
-
-        return None
 
     def abi_argument_types(self) -> None | list[algosdk.abi.ABIType]:
         if not (self.input_types or self.is_abi()):
@@ -396,7 +388,6 @@ class PyTealDryRunExecutor:
 
     def compile(self, version: int, assemble_constants: bool = False) -> str:
         return _MatchMode(
-            runner=self,
             app_case=lambda: compileTeal(
                 self.program(),
                 self.mode,
@@ -413,27 +404,24 @@ class PyTealDryRunExecutor:
 
     def dryrun_on_sequence(
         self,
-        inputs: list[Sequence[PyTypes]],
+        inputs: list[Sequence[str | int]],
         compiler_version=6,
     ) -> list[DryRunInspector]:
-        teal = self.compile(compiler_version)
         return _MatchMode(
-            self,
             app_case=lambda: DryRunExecutor.dryrun_app_on_sequence(
-                algod=algod_with_assertion(),
-                teal=teal,
-                inputs=inputs,
-                abi_method_signature=self.abi_method_signature(),
-                omit_method_selector=True,
+                algod_with_assertion(),
+                self.compile(compiler_version),
+                inputs,
+                self.abi_argument_types(),
+                self.abi_return_type(),
             ),
             signature_case=lambda: DryRunExecutor.dryrun_logicsig_on_sequence(
-                algod=algod_with_assertion(),
-                teal=teal,
-                inputs=inputs,
-                abi_method_signature=self.abi_method_signature(),
-                omit_method_selector=True,
+                algod_with_assertion(),
+                self.compile(compiler_version),
+                inputs,
+                self.abi_argument_types(),
+                self.abi_return_type(),
             ),
-            trace=teal,
         )(self.mode)
 
     def dryrun(
@@ -441,22 +429,19 @@ class PyTealDryRunExecutor:
         args: Sequence[bytes | str | int],
         compiler_version=6,
     ) -> DryRunInspector:
-        teal = self.compile(compiler_version)
         return _MatchMode(
-            self,
             app_case=lambda: DryRunExecutor.dryrun_app(
                 algod_with_assertion(),
-                teal,
+                self.compile(compiler_version),
                 args,
-                abi_method_signature=self.abi_method_signature(),
-                omit_method_selector=True,
+                self.abi_argument_types(),
+                self.abi_return_type(),
             ),
             signature_case=lambda: DryRunExecutor.dryrun_logicsig(
                 algod_with_assertion(),
-                teal,
+                self.compile(compiler_version),
                 args,
-                abi_method_signature=self.abi_method_signature(),
-                omit_method_selector=True,
+                self.abi_argument_types(),
+                self.abi_return_type(),
             ),
-            trace=teal,
         )(self.mode)

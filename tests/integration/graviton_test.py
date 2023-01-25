@@ -4,6 +4,17 @@ from typing import Any, Dict
 
 import pytest
 
+import pyteal as pt
+
+from tests.compile_asserts import assert_teal_as_expected
+from tests.blackbox import (
+    Blackbox,
+    BlackboxWrapper,
+    algod_with_assertion,
+    mode_to_execution_mode,
+    PyTealDryRunExecutor,
+)
+
 from graviton.blackbox import (
     DryRunProperty as DRProp,
     DryRunEncoder as Encoder,
@@ -11,18 +22,8 @@ from graviton.blackbox import (
     DryRunInspector,
     mode_has_property,
 )
-from graviton.invariant import Invariant, PredicateKind
 
-import pyteal as pt
-from pyteal.util import algod_with_assertion
-
-from tests.blackbox import (
-    Blackbox,
-    BlackboxWrapper,
-    PyTealDryRunExecutor,
-    mode_to_execution_mode,
-)
-from tests.compile_asserts import assert_teal_as_expected
+from graviton.invariant import Invariant
 
 PATH = Path.cwd() / "tests" / "integration"
 FIXTURES = PATH / "teal"
@@ -41,7 +42,7 @@ def wrap_compile_and_save(
     is_app = mode == pt.Mode.Application
 
     teal = PyTealDryRunExecutor(subr, mode).compile(version, assemble_constants)
-    tealfile = f'{"app" if is_app else "lsig"}_{case_name}_v{version}.teal'
+    tealfile = f'{"app" if is_app else "lsig"}_{case_name}.teal'
 
     tealdir = GENERATED / test_name
     tealdir.mkdir(parents=True, exist_ok=True)
@@ -136,6 +137,13 @@ def fib(n):
     return a
 
 
+def fib_cost(args):
+    cost = 17
+    for n in range(1, args[0] + 1):
+        cost += 31 * fib(n - 1)
+    return cost
+
+
 # ---- Blackbox pure unit tests (Skipping for now due to flakiness) ---- #
 
 
@@ -155,8 +163,6 @@ def test_stable_teal_generation(subr, mode):
     case_name = subr.name()
     print(f"stable TEAL generation test for {case_name} in mode {mode}")
 
-    # HANG NOTE: I prefer not to modify this test, for it is skipped now on thread-unsafe behavior,
-    # and I would suggest revisiting later after we have satisfied solution for #199.
     _, _, tealfile = wrap_compile_and_save(subr, mode, 6, True, "stability", case_name)
     path2actual = GENERATED / "stability" / tealfile
     path2expected = FIXTURES / "stability" / tealfile
@@ -168,7 +174,7 @@ APP_SCENARIOS = {
         "inputs": [()],
         # since only a single input, just assert a constant in each case
         "assertions": {
-            DRProp.cost: lambda _, actual: actual in {11, 12},
+            DRProp.cost: 11,
             # int assertions on log outputs need encoding to varuint-hex:
             DRProp.lastLog: Encoder.hex(2**10),
             # dicts have a special meaning as assertions. So in the case of "finalScratch"
@@ -185,7 +191,7 @@ APP_SCENARIOS = {
     square_byref: {
         "inputs": [(i,) for i in range(100)],
         "assertions": {
-            DRProp.cost: lambda _, actual: 20 < actual < 24,
+            DRProp.cost: lambda _, actual: 20 < actual < 22,
             DRProp.lastLog: Encoder.hex(1337),
             # due to dry-run artifact of not reporting 0-valued scratchvars,
             # we have a special case for n=0:
@@ -193,7 +199,7 @@ APP_SCENARIOS = {
                 {1, 1337, (args[0] ** 2 if args[0] else 1)}
             ).issubset(set(actual.values())),
             DRProp.stackTop: 1337,
-            DRProp.maxStackHeight: lambda _, actual: actual in [3, 4],
+            DRProp.maxStackHeight: 3,
             DRProp.status: "PASS",
             DRProp.passed: True,
             DRProp.rejected: False,
@@ -206,14 +212,14 @@ APP_SCENARIOS = {
             DRProp.cost: 14,
             DRProp.lastLog: {
                 # since execution REJECTS for 0, expect last log for this case to be None
-                (i,): Encoder.hex(i * i)
+                (i,): Encoder.hex(i * i) if i else None
                 for i in range(100)
             },
             DRProp.finalScratch: lambda args: (
                 {0: args[0] ** 2, 1: args[0]} if args[0] else {}
             ),
             DRProp.stackTop: lambda args: args[0] ** 2,
-            DRProp.maxStackHeight: lambda _, actual: actual in range(2, 5),
+            DRProp.maxStackHeight: 2,
             DRProp.status: lambda i: "PASS" if i[0] > 0 else "REJECT",
             DRProp.passed: lambda i: i[0] > 0,
             DRProp.rejected: lambda i: i[0] == 0,
@@ -223,7 +229,7 @@ APP_SCENARIOS = {
     swap: {
         "inputs": [(1, 2), (1, "two"), ("one", 2), ("one", "two")],
         "assertions": {
-            DRProp.cost: lambda _, actual: actual in [27, 30],
+            DRProp.cost: 27,
             DRProp.lastLog: Encoder.hex(1337),
             DRProp.finalScratch: lambda args: {
                 0: 1337,
@@ -234,7 +240,7 @@ APP_SCENARIOS = {
                 5: Encoder.hex0x(args[0]),
             },
             DRProp.stackTop: 1337,
-            DRProp.maxStackHeight: lambda _, actual: actual in [2, 4],
+            DRProp.maxStackHeight: 2,
             DRProp.status: "PASS",
             DRProp.passed: True,
             DRProp.rejected: False,
@@ -244,7 +250,10 @@ APP_SCENARIOS = {
     string_mult: {
         "inputs": [("xyzw", i) for i in range(100)],
         "assertions": {
-            DRProp.lastLog: (lambda args: Encoder.hex(args[0] * args[1])),
+            DRProp.cost: lambda args: 30 + 15 * args[1],
+            DRProp.lastLog: (
+                lambda args: Encoder.hex(args[0] * args[1]) if args[1] else None
+            ),
             # due to dryrun 0-scratchvar artifact, special case for i == 0:
             DRProp.finalScratch: lambda args: (
                 {
@@ -263,6 +272,7 @@ APP_SCENARIOS = {
                 }
             ),
             DRProp.stackTop: lambda args: len(args[0] * args[1]),
+            DRProp.maxStackHeight: lambda args: 3 if args[1] else 2,
             DRProp.status: lambda args: ("PASS" if 0 < args[1] < 45 else "REJECT"),
             DRProp.passed: lambda args: 0 < args[1] < 45,
             DRProp.rejected: lambda args: 0 >= args[1] or args[1] >= 45,
@@ -272,6 +282,9 @@ APP_SCENARIOS = {
     oldfac: {
         "inputs": [(i,) for i in range(25)],
         "assertions": {
+            DRProp.cost: lambda args, actual: (
+                actual - 40 <= 17 * args[0] <= actual + 40
+            ),
             DRProp.lastLog: lambda args: (
                 Encoder.hex(fac_with_overflow(args[0])) if args[0] < 21 else None
             ),
@@ -285,6 +298,7 @@ APP_SCENARIOS = {
                 )
             ),
             DRProp.stackTop: lambda args: fac_with_overflow(args[0]),
+            DRProp.maxStackHeight: lambda args: max(2, 2 * args[0]),
             DRProp.status: lambda args: "PASS" if args[0] < 21 else "REJECT",
             DRProp.passed: lambda args: args[0] < 21,
             DRProp.rejected: lambda args: args[0] >= 21,
@@ -294,10 +308,11 @@ APP_SCENARIOS = {
         },
     },
     slow_fibonacci: {
-        "inputs": [(i,) for i in range(17)],
+        "inputs": [(i,) for i in range(18)],
         "assertions": {
-            DRProp.lastLog: lambda args, actual: (
-                Encoder.hex(fib(args[0])) == actual if 0 <= args[0] < 17 else True
+            DRProp.cost: lambda args: (fib_cost(args) if args[0] < 17 else 70_000),
+            DRProp.lastLog: lambda args: (
+                Encoder.hex(fib(args[0])) if 0 < args[0] < 17 else None
             ),
             DRProp.finalScratch: lambda args, actual: (
                 actual == {1: args[0], 0: fib(args[0])}
@@ -307,6 +322,10 @@ APP_SCENARIOS = {
             # we declare to "not care" about the top of the stack for n >= 17
             DRProp.stackTop: lambda args, actual: (
                 actual == fib(args[0]) if args[0] < 17 else True
+            ),
+            # similarly, we don't care about max stack height for n >= 17
+            DRProp.maxStackHeight: lambda args, actual: (
+                actual == max(2, 2 * args[0]) if args[0] < 17 else True
             ),
             DRProp.status: lambda args: "PASS" if 0 < args[0] < 8 else "REJECT",
             DRProp.passed: lambda args: 0 < args[0] < 8,
@@ -340,13 +359,15 @@ LOGICSIG_SCENARIOS = {
     square_byref: {
         "inputs": [(i,) for i in range(100)],
         "assertions": {
+            # DRProp.cost: lambda _, actual: 20 < actual < 22,
+            # DRProp.lastLog: Encoder.hex(1337),
             # due to dry-run artifact of not reporting 0-valued scratchvars,
             # we have a special case for n=0:
-            DRProp.finalScratch: lambda args, actual: (
-                {1, 1337, (args[0] ** 2 if args[0] else 1)}
-            ).issubset(set(actual.values())),
+            DRProp.finalScratch: lambda args: (
+                {0: 1, 1: args[0] ** 2} if args[0] else {0: 1}
+            ),
             DRProp.stackTop: 1337,
-            DRProp.maxStackHeight: lambda _, actual: actual in [3, 4],
+            DRProp.maxStackHeight: 3,
             DRProp.status: "PASS",
             DRProp.passed: True,
             DRProp.rejected: False,
@@ -356,11 +377,11 @@ LOGICSIG_SCENARIOS = {
     square: {
         "inputs": [(i,) for i in range(100)],
         "assertions": {
-            DRProp.finalScratch: lambda args: (
-                {0: args[0] ** 2, 1: args[0]} if args[0] else {}
-            ),
+            # DRProp.cost: 14,
+            # DRProp.lastLog: {(i,): Encoder.hex(i * i) if i else None for i in range(100)},
+            DRProp.finalScratch: lambda args: ({0: args[0]} if args[0] else {}),
             DRProp.stackTop: lambda args: args[0] ** 2,
-            DRProp.maxStackHeight: lambda _, actual: actual in range(2, 5),
+            DRProp.maxStackHeight: 2,
             DRProp.status: lambda i: "PASS" if i[0] > 0 else "REJECT",
             DRProp.passed: lambda i: i[0] > 0,
             DRProp.rejected: lambda i: i[0] == 0,
@@ -370,16 +391,17 @@ LOGICSIG_SCENARIOS = {
     swap: {
         "inputs": [(1, 2), (1, "two"), ("one", 2), ("one", "two")],
         "assertions": {
+            # DRProp.cost: 27,
+            # DRProp.lastLog: Encoder.hex(1337),
             DRProp.finalScratch: lambda args: {
-                0: 1337,
-                1: Encoder.hex0x(args[1]),
+                0: 3,
+                1: 4,
                 2: Encoder.hex0x(args[0]),
-                3: 1,
-                4: 2,
-                5: Encoder.hex0x(args[0]),
+                3: Encoder.hex0x(args[1]),
+                4: Encoder.hex0x(args[0]),
             },
             DRProp.stackTop: 1337,
-            DRProp.maxStackHeight: lambda _, actual: actual in [2, 4],
+            DRProp.maxStackHeight: 2,
             DRProp.status: "PASS",
             DRProp.passed: True,
             DRProp.rejected: False,
@@ -389,24 +411,25 @@ LOGICSIG_SCENARIOS = {
     string_mult: {
         "inputs": [("xyzw", i) for i in range(100)],
         "assertions": {
-            # due to dryrun 0-scratchvar artifact, special case for i == 0:
+            # DRProp.cost: lambda args: 30 + 15 * args[1],
+            # DRProp.lastLog: lambda args: Encoder.hex(args[0] * args[1]) if args[1] else None,
             DRProp.finalScratch: lambda args: (
                 {
-                    0: Encoder.hex0x(args[0] * args[1]),
-                    1: Encoder.hex0x(args[0] * args[1]),
-                    2: 1,
-                    3: args[1],
-                    4: args[1] + 1,
-                    5: Encoder.hex0x(args[0]),
+                    0: len(args[0]),
+                    1: args[1],
+                    2: args[1] + 1,
+                    3: Encoder.hex0x(args[0]),
+                    4: Encoder.hex0x(args[0] * args[1]),
                 }
                 if args[1]
                 else {
-                    2: 1,
-                    4: args[1] + 1,
-                    5: Encoder.hex0x(args[0]),
+                    0: len(args[0]),
+                    2: args[1] + 1,
+                    3: Encoder.hex0x(args[0]),
                 }
             ),
             DRProp.stackTop: lambda args: len(args[0] * args[1]),
+            DRProp.maxStackHeight: lambda args: 3 if args[1] else 2,
             DRProp.status: lambda args: "PASS" if args[1] else "REJECT",
             DRProp.passed: lambda args: bool(args[1]),
             DRProp.rejected: lambda args: not bool(args[1]),
@@ -416,35 +439,39 @@ LOGICSIG_SCENARIOS = {
     oldfac: {
         "inputs": [(i,) for i in range(25)],
         "assertions": {
+            # DRProp.cost: lambda args, actual: actual - 40 <= 17 * args[0] <= actual + 40,
+            # DRProp.lastLog: lambda args, actual: (actual is None) or (int(actual, base=16) == fac_with_overflow(args[0])),
             DRProp.finalScratch: lambda args: (
-                {1: args[0], 0: fac_with_overflow(args[0])}
-                if 0 < args[0] < 21
-                else (
-                    {1: min(21, args[0])}
-                    if args[0]
-                    else {0: fac_with_overflow(args[0])}
-                )
+                {0: min(args[0], 21)} if args[0] else {}
             ),
             DRProp.stackTop: lambda args: fac_with_overflow(args[0]),
+            DRProp.maxStackHeight: lambda args: max(2, 2 * args[0]),
             DRProp.status: lambda args: "PASS" if args[0] < 21 else "REJECT",
             DRProp.passed: lambda args: args[0] < 21,
             DRProp.rejected: lambda args: args[0] >= 21,
             DRProp.errorMessage: lambda args, actual: (
-                actual is None if args[0] < 21 else "overflowed" in actual
+                actual is None
+                if args[0] < 21
+                else "logic 0 failed at line 21: * overflowed" in actual
             ),
         },
     },
     slow_fibonacci: {
-        "inputs": [(i,) for i in range(17)],
+        "inputs": [(i,) for i in range(18)],
         "assertions": {
+            # DRProp.cost: fib_cost,
+            # DRProp.lastLog: fib_last_log,
+            # by returning True for n >= 15, we're declaring that we don't care about the scratchvar's for such cases:
             DRProp.finalScratch: lambda args, actual: (
-                actual == {1: args[0], 0: fib(args[0])}
-                if 0 < args[0] < 17
-                else (True if args[0] >= 17 else actual == {})
+                actual == {0: args[0]}
+                if 0 < args[0] < 15
+                else (True if args[0] else actual == {})
             ),
-            # we declare to "not care" about the top of the stack for n >= 15
             DRProp.stackTop: lambda args, actual: (
                 actual == fib(args[0]) if args[0] < 15 else True
+            ),
+            DRProp.maxStackHeight: lambda args, actual: (
+                actual == max(2, 2 * args[0]) if args[0] < 15 else True
             ),
             DRProp.status: lambda args: "PASS" if 0 < args[0] < 15 else "REJECT",
             DRProp.passed: lambda args: 0 < args[0] < 15,
@@ -458,16 +485,6 @@ LOGICSIG_SCENARIOS = {
     },
 }
 
-APP_IDENTICAL_PREDICATES = {
-    DRProp.lastLog: PredicateKind.IdenticalPair,
-    DRProp.status: PredicateKind.IdenticalPair,
-    DRProp.error: PredicateKind.IdenticalPair,
-}
-LSIG_IDENTICAL_PREDICATES = {
-    DRProp.status: PredicateKind.IdenticalPair,
-    DRProp.error: PredicateKind.IdenticalPair,
-}
-
 
 def blackbox_test_runner(
     subr: pt.SubroutineFnWrapper,
@@ -475,7 +492,7 @@ def blackbox_test_runner(
     scenario: Dict[str, Any],
     version: int,
     assemble_constants: bool = True,
-) -> list[DryRunInspector]:
+):
     case_name = subr.name()
     print(f"blackbox test of {case_name} with mode {mode}")
     exec_mode = mode_to_execution_mode(mode)
@@ -493,25 +510,24 @@ def blackbox_test_runner(
     algod = algod_with_assertion()
 
     # 2. validate dry run scenarios:
-    inputs = scenario["inputs"]
-    predicates = scenario["assertions"]
-    assert inputs and isinstance(inputs, list)
-    assert predicates, "Must configure >= 1 predicate"
-    assert isinstance(predicates, dict)
+    inputs, predicates = Invariant.inputs_and_invariants(
+        scenario, exec_mode, raw_predicates=True
+    )
 
     # 3. execute dry run sequence:
     execute = DryRunExecutor.execute_one_dryrun
     inspectors = list(map(lambda a: execute(algod, teal, a, exec_mode), inputs))
 
     # 4. Statistical report:
-    csvpath = GENERATED / "blackbox" / f"{tealfile}_v{version}.csv"
+    csvpath = GENERATED / "blackbox" / f"{tealfile}.csv"
     with open(csvpath, "w") as f:
         f.write(DryRunInspector.csv_report(inputs, inspectors))
 
     print(f"Saved Dry Run CSV report to {csvpath}")
 
     # 5. Sequential assertions (if provided any)
-    for i, (dr_prop, predicate) in enumerate(predicates.items()):
+    for i, type_n_assertion in enumerate(predicates.items()):
+        dr_prop, predicate = type_n_assertion
 
         if SKIP_SCRATCH_ASSERTIONS and dr_prop == DRProp.finalScratch:
             print("skipping scratch assertions because unstable slots produced")
@@ -521,9 +537,7 @@ def blackbox_test_runner(
 
         invariant = Invariant(predicate, name=f"{case_name}[{i}]@{mode}-{dr_prop}")
         print(f"{i+1}. Assertion for {case_name}-{mode}: {dr_prop} <<{predicate}>>")
-        invariant.validates(dr_prop, inspectors)
-
-    return inspectors
+        invariant.validates(dr_prop, inputs, inspectors)
 
 
 # ---- Graviton / Blackbox tests ---- #
@@ -534,15 +548,7 @@ def test_blackbox_subroutines_as_apps(
     subr: pt.SubroutineFnWrapper,
     scenario: Dict[str, Any],
 ):
-    inspectors6 = blackbox_test_runner(subr, pt.Mode.Application, scenario, 6)
-    inspectors8 = blackbox_test_runner(subr, pt.Mode.Application, scenario, 8)
-
-    Invariant.full_validation(
-        APP_IDENTICAL_PREDICATES,
-        inspectors=inspectors6,
-        identities=inspectors8,
-        msg=f"{subr.name()=}",
-    )
+    blackbox_test_runner(subr, pt.Mode.Application, scenario, 6)
 
 
 @pytest.mark.parametrize("subr, scenario", LOGICSIG_SCENARIOS.items())
@@ -550,14 +556,7 @@ def test_blackbox_subroutines_as_logic_sigs(
     subr: pt.SubroutineFnWrapper,
     scenario: Dict[str, Any],
 ):
-    inspectors6 = blackbox_test_runner(subr, pt.Mode.Signature, scenario, 6)
-    inspectors8 = blackbox_test_runner(subr, pt.Mode.Signature, scenario, 8)
-    Invariant.full_validation(
-        LSIG_IDENTICAL_PREDICATES,
-        inspectors=inspectors6,
-        identities=inspectors8,
-        msg=f"{subr.name()=}",
-    )
+    blackbox_test_runner(subr, pt.Mode.Signature, scenario, 6)
 
 
 def blackbox_pyteal_example1():
@@ -576,56 +575,45 @@ def blackbox_pyteal_example1():
     x = 9
     args = [x]
 
-    def evaluate_and_check(version: int):
-        # evaluate the programs
-        app_result = PyTealDryRunExecutor(square, Mode.Application).dryrun(
-            args, compiler_version=version
-        )
-        lsig_result = PyTealDryRunExecutor(square, Mode.Signature).dryrun(
-            args, compiler_version=version
-        )
+    # evaluate the programs
+    app_result = PyTealDryRunExecutor(square, Mode.Application).dryrun(args)
+    lsig_result = PyTealDryRunExecutor(square, Mode.Signature).dryrun(args)
 
-        # check to see that x^2 is at the top of the stack as expected
-        assert app_result.stack_top() == x**2, app_result.report(
-            args, "stack_top() gave unexpected results for app"
-        )
-        assert lsig_result.stack_top() == x**2, lsig_result.report(
-            args, "stack_top() gave unexpected results for lsig"
-        )
-
-        # check to see that itob of x^2 has been logged (only for the app case)
-        assert app_result.last_log() == DryRunEncoder.hex(x**2), app_result.report(
-            args, "last_log() gave unexpected results from app"
-        )
-
-        return app_result, lsig_result
-
-    app6, lsig6 = evaluate_and_check(6)
-    app8, lsig8 = evaluate_and_check(8)
-    Invariant.full_validation(
-        APP_IDENTICAL_PREDICATES,
-        inspectors=[app6],
-        identities=[app8],
-        msg="Mode.Application example 1",
+    # check to see that x^2 is at the top of the stack as expected
+    assert app_result.stack_top() == x**2, app_result.report(
+        args, "stack_top() gave unexpected results for app"
     )
-    Invariant.full_validation(
-        LSIG_IDENTICAL_PREDICATES,
-        inspectors=[lsig6],
-        identities=[lsig8],
-        msg="Mode.Signature example 1",
+    assert lsig_result.stack_top() == x**2, lsig_result.report(
+        args, "stack_top() gave unexpected results for lsig"
+    )
+
+    # check to see that itob of x^2 has been logged (only for the app case)
+    assert app_result.last_log() == DryRunEncoder.hex(x**2), app_result.report(
+        args, "last_log() gave unexpected results from app"
     )
 
 
 def blackbox_pyteal_example2():
     # Example 2: Using blackbox_pyteal to make 400 assertions and generate a CSV report with 400 dryrun rows
-    import math
-    import random
     from itertools import product
+    import math
     from pathlib import Path
+    import random
 
     from graviton.blackbox import DryRunInspector
 
-    from pyteal import For, If, Int, Mod, Mode, ScratchVar, Seq, Subroutine, TealType
+    from pyteal import (
+        For,
+        If,
+        Int,
+        Mod,
+        Mode,
+        ScratchVar,
+        Seq,
+        Subroutine,
+        TealType,
+    )
+
     from tests.blackbox import Blackbox
 
     # GCD via the Euclidean Algorithm (iterative version):
@@ -651,45 +639,36 @@ def blackbox_pyteal_example2():
         )
     )
 
-    def test_and_report(version: int):
-        # assert that each result is that same as what Python's math.gcd() computes
-        inspectors = PyTealDryRunExecutor(euclid, Mode.Application).dryrun_on_sequence(
-            inputs, compiler_version=version
-        )
-        for i, result in enumerate(inspectors):
-            args = inputs[i]
-            assert result.stack_top() == math.gcd(*args), result.report(
-                args, f"failed for {args}"
-            )
-
-        # save the CSV to ...current working directory.../euclid_v{version}.csv
-        euclid_csv = DryRunInspector.csv_report(inputs, inspectors)
-        with open(Path.cwd() / f"euclid_v{version}.csv", "w") as f:
-            f.write(euclid_csv)
-
-        return inspectors
-
-    inspectors6 = test_and_report(6)
-    inspectors8 = test_and_report(8)
-    Invariant.full_validation(
-        APP_IDENTICAL_PREDICATES,
-        inspectors=inspectors6,
-        identities=inspectors8,
-        msg="example 2",
+    # assert that each result is that same as what Python's math.gcd() computes
+    inspectors = PyTealDryRunExecutor(euclid, Mode.Application).dryrun_on_sequence(
+        inputs
     )
+    for i, result in enumerate(inspectors):
+        args = inputs[i]
+        assert result.stack_top() == math.gcd(*args), result.report(
+            args, f"failed for {args}"
+        )
+
+    # save the CSV to ...current working directory.../euclid.csv
+    euclid_csv = DryRunInspector.csv_report(inputs, inspectors)
+    with open(Path.cwd() / "euclid.csv", "w") as f:
+        f.write(euclid_csv)
 
 
 def blackbox_pyteal_example3():
     # Example 3: declarative Test Driven Development approach through Invariant's
+    from itertools import product
     import math
     import random
-    from itertools import product
 
-    from graviton.blackbox import DryRunEncoder
-    from graviton.blackbox import DryRunProperty as DRProp
+    from graviton.blackbox import (
+        DryRunEncoder,
+        DryRunProperty as DRProp,
+    )
     from graviton.invariant import Invariant
 
     from pyteal import If, Int, Mod, Mode, Subroutine, TealType
+
     from tests.blackbox import Blackbox
 
     # avoid flaky tests just in case I was wrong about the stack height invariant...
@@ -744,50 +723,24 @@ def blackbox_pyteal_example3():
         )
 
     # Execute on the input sequence to get a dry-run inspectors:
-    inspectors6 = PyTealDryRunExecutor(euclid, Mode.Application).dryrun_on_sequence(
-        inputs, compiler_version=6
+    inspectors = PyTealDryRunExecutor(euclid, Mode.Application).dryrun_on_sequence(
+        inputs
     )
 
     # Assert that each invariant holds on the sequences of inputs and dry-runs:
     for property, predicate in predicates.items():
-        Invariant(predicate).validates(property, inspectors6)
-
-    # Execute on the input sequence to get a dry-run inspectors:
-    inspectors8 = PyTealDryRunExecutor(euclid, Mode.Application).dryrun_on_sequence(
-        inputs, compiler_version=8
-    )
-
-    # Assert that each invariant holds on the sequences of inputs and dry-runs:
-    for property, predicate in predicates.items():
-        Invariant(predicate).validates(property, inspectors8)
-
-    Invariant.full_validation(
-        APP_IDENTICAL_PREDICATES,
-        inspectors=inspectors6,
-        identities=inspectors8,
-        msg="Mode.Application example 3",
-    )
-
-    # Assert that each invariant holds on the sequences of inputs and dry-runs:
-    for property, predicate in predicates.items():
-        Invariant(predicate).validates(property, inspectors8)
-
-    Invariant.full_validation(
-        APP_IDENTICAL_PREDICATES,
-        inspectors=inspectors6,
-        identities=inspectors8,
-        msg="Mode.Application example 3",
-    )
+        Invariant(predicate).validates(property, inputs, inspectors)
 
 
 def blackbox_pyteal_example4():
     # Example 4: Using PyTealDryRunExecutor to debug an ABIReturnSubroutine with an app, logic sig and csv report
-    import random
     from pathlib import Path
+    import random
 
     from graviton.blackbox import DryRunInspector
 
     from pyteal import (
+        abi,
         ABIReturnSubroutine,
         Expr,
         For,
@@ -796,8 +749,8 @@ def blackbox_pyteal_example4():
         ScratchVar,
         Seq,
         TealType,
-        abi,
     )
+
     from tests.blackbox import Blackbox, PyTealDryRunExecutor
 
     # Sum a dynamic uint64 array
@@ -833,73 +786,53 @@ def blackbox_pyteal_example4():
     for n in range(N):
         inputs.append(tuple([random.sample(choices, n)]))
 
-    def test_and_report_for_app_and_lsig(_version: int):
-        app_inspectors = app_pytealer.dryrun_on_sequence(
-            inputs, compiler_version=_version
+    app_inspectors = app_pytealer.dryrun_on_sequence(inputs)
+
+    lsig_inspectors = lsig_pytealer.dryrun_on_sequence(inputs)
+
+    for i in range(N):
+        args = inputs[i]
+
+        app_inspector = app_inspectors[i]
+        lsig_inspector = lsig_inspectors[i]
+
+        def message(insp):
+            return insp.report(args, f"failed for {args}", row=i)
+
+        # the app should pass exactly when it's cost was within the 700 budget:
+        assert app_inspector.passed() == (app_inspector.cost() <= 700), message(
+            app_inspector
         )
-        lsig_inspectors = lsig_pytealer.dryrun_on_sequence(
-            inputs, compiler_version=_version
-        )
-        for i in range(N):
-            args = inputs[i]
+        # the lsig always passes (never goes over budget):
+        assert lsig_inspector.passed(), message(lsig_inspector)
 
-            app_inspector = app_inspectors[i]
-            lsig_inspector = lsig_inspectors[i]
+        expected = sum(args[0])
+        actual4app = app_inspector.last_log()
+        assert expected == actual4app, message(app_inspector)
 
-            def message(insp):
-                return insp.report(args, f"failed for {args}", row=i)
-
-            # the app should pass exactly when it's cost was within the 700 budget:
-            assert app_inspector.passed() == (app_inspector.cost() <= 700), message(
+        if i > 0:
+            assert expected in app_inspector.final_scratch().values(), message(
                 app_inspector
             )
-            # the lsig always passes (never goes over budget):
-            assert lsig_inspector.passed(), message(lsig_inspector)
+            assert expected in lsig_inspector.final_scratch().values(), message(
+                lsig_inspector
+            )
 
-            expected = sum(args[0])
-            actual4app = app_inspector.last_log()
-            assert expected == actual4app, message(app_inspector)
+    def report(kind):
+        assert kind in ("app", "lsig")
+        insps = app_inspectors if kind == "app" else lsig_inspectors
+        csv_report = DryRunInspector.csv_report(inputs, insps)
+        with open(Path.cwd() / f"abi_sum_{kind}.csv", "w") as f:
+            f.write(csv_report)
 
-            if i > 0:
-                assert expected in app_inspector.final_scratch().values(), message(
-                    app_inspector
-                )
-                assert expected in lsig_inspector.final_scratch().values(), message(
-                    lsig_inspector
-                )
-
-        def report(kind):
-            assert kind in ("app", "lsig")
-            insps = app_inspectors if kind == "app" else lsig_inspectors
-            csv_report = DryRunInspector.csv_report(inputs, insps)
-            with open(Path.cwd() / f"abi_sum_{kind}_v{_version}.csv", "w") as f:
-                f.write(csv_report)
-
-        report("app")
-        report("lsig")
-
-        return app_inspectors, lsig_inspectors
-
-    app_inspectors6, lsig_inspectors6 = test_and_report_for_app_and_lsig(6)
-    app_inspectors8, lsig_inspectors8 = test_and_report_for_app_and_lsig(8)
-    Invariant.full_validation(
-        APP_IDENTICAL_PREDICATES,
-        inspectors=app_inspectors6,
-        identities=app_inspectors8,
-        msg=f"Mode.Application example 4 {abi_sum.name()=}",
-    )
-    Invariant.full_validation(
-        LSIG_IDENTICAL_PREDICATES,
-        inspectors=lsig_inspectors6,
-        identities=lsig_inspectors8,
-        msg=f"Mode.Signature example 4 {abi_sum.name()=}",
-    )
+    report("app")
+    report("lsig")
 
 
 def blackbox_pyteal_example5():
     from graviton.blackbox import DryRunEncoder
 
-    from pyteal import Int, Mode, Subroutine, TealType, abi
+    from pyteal import abi, Subroutine, TealType, Int, Mode
     from tests.blackbox import Blackbox
 
     @Blackbox([None])
@@ -912,47 +845,27 @@ def blackbox_pyteal_example5():
 
     inputs = [[i] for i in range(1, 11)]
 
-    def test_app_and_lsig(_version: int):
-        app_inspect = app_pytealer.dryrun_on_sequence(inputs, compiler_version=_version)
-        lsig_inspect = lsig_pytealer.dryrun_on_sequence(
-            inputs, compiler_version=_version
+    app_inspect = app_pytealer.dryrun_on_sequence(inputs)
+    lsig_inspect = lsig_pytealer.dryrun_on_sequence(inputs)
+
+    for index, inspect in enumerate(app_inspect):
+        input_var = inputs[index][0]
+        assert inspect.stack_top() == input_var**3, inspect.report(
+            args=inputs[index], msg="stack_top() gave unexpected results from app"
+        )
+        assert inspect.last_log() == DryRunEncoder.hex(input_var**3), inspect.report(
+            args=inputs[index], msg="last_log() gave unexpected results from app"
         )
 
-        for index, inspect in enumerate(app_inspect):
-            input_var = inputs[index][0]
-            assert inspect.stack_top() == input_var**3, inspect.report(
-                args=inputs[index], msg="stack_top() gave unexpected results from app"
-            )
-            assert inspect.last_log() == DryRunEncoder.hex(
-                input_var**3
-            ), inspect.report(
-                args=inputs[index], msg="last_log() gave unexpected results from app"
-            )
-
-        for index, inspect in enumerate(lsig_inspect):
-            input_var = inputs[index][0]
-            assert inspect.stack_top() == input_var**3, inspect.report(
-                args=inputs[index], msg="stack_top() gave unexpected results from app"
-            )
-        return app_inspect, lsig_inspect
-
-    app_inspectors6, lsig_inspectors6 = test_app_and_lsig(6)
-    app_inspectors8, lsig_inspectors8 = test_app_and_lsig(8)
-    Invariant.full_validation(
-        APP_IDENTICAL_PREDICATES,
-        inspectors=app_inspectors6,
-        identities=app_inspectors8,
-        msg="Mode.Application example 5",
-    )
-    Invariant.full_validation(
-        LSIG_IDENTICAL_PREDICATES,
-        inspectors=lsig_inspectors6,
-        identities=lsig_inspectors8,
-        msg="Mode.Signature example 5",
-    )
+    for index, inspect in enumerate(lsig_inspect):
+        input_var = inputs[index][0]
+        assert inspect.stack_top() == input_var**3, inspect.report(
+            args=inputs[index], msg="stack_top() gave unexpected results from app"
+        )
 
 
 def blackbox_pyteal_while_continue_test():
+    from tests.blackbox import Blackbox
     from pyteal import (
         Continue,
         Int,
@@ -964,7 +877,6 @@ def blackbox_pyteal_while_continue_test():
         TealType,
         While,
     )
-    from tests.blackbox import Blackbox
 
     @Blackbox(input_types=[TealType.uint64])
     @Subroutine(TealType.uint64)
@@ -981,21 +893,11 @@ def blackbox_pyteal_while_continue_test():
             Return(i.load()),
         )
 
-    executor = PyTealDryRunExecutor(while_continue_accumulation, Mode.Signature)
-
     for x in range(30):
         args = [x]
-        lsig_result = executor.dryrun(args)
-        if x == 0:
-            assert not lsig_result.passed()
-        else:
-            assert lsig_result.passed()
-
-        assert lsig_result.stack_top() == x, lsig_result.report(
-            args, "stack_top() gave unexpected results for lsig"
-        )
-
-        lsig_result = executor.dryrun(args, compiler_version=8)
+        lsig_result = PyTealDryRunExecutor(
+            while_continue_accumulation, Mode.Signature
+        ).dryrun(args)
         if x == 0:
             assert not lsig_result.passed()
         else:
@@ -1008,9 +910,16 @@ def blackbox_pyteal_while_continue_test():
 
 def blackbox_pyteal_named_tupleness_test():
     from typing import Literal as L
-
-    from pyteal import And, Mode, Return, Seq, Subroutine, TealType, abi
     from tests.blackbox import Blackbox
+    from pyteal import (
+        Seq,
+        abi,
+        Subroutine,
+        TealType,
+        Return,
+        And,
+        Mode,
+    )
 
     class NamedTupleExample(abi.NamedTuple):
         a: abi.Field[abi.Bool]
@@ -1053,32 +962,10 @@ def blackbox_pyteal_named_tupleness_test():
     lsig_pytealer = PyTealDryRunExecutor(named_tuple_field_access, Mode.Signature)
     args = (False, b"1" * 32, (0, False), b"0" * 10, [True] * 4, 0)
 
-    inspector6 = lsig_pytealer.dryrun(args, compiler_version=6)
+    inspector = lsig_pytealer.dryrun(args)
 
-    assert inspector6.stack_top() == 1
-    assert inspector6.passed()
-
-    inspector8 = lsig_pytealer.dryrun(args, compiler_version=8)
-    assert inspector8.passed()
-    assert inspector8.stack_top() == 1
-
-    Invariant.full_validation(
-        LSIG_IDENTICAL_PREDICATES,
-        inspectors=[inspector6],
-        identities=[inspector8],
-        msg="Mode.Signature NamedTuple example",
-    )
-
-    inspector = lsig_pytealer.dryrun(args, compiler_version=8)
-    assert inspector.passed()
     assert inspector.stack_top() == 1
-
-    Invariant.full_validation(
-        LSIG_IDENTICAL_PREDICATES,
-        inspectors=[inspector6],
-        identities=[inspector8],
-        msg="Mode.Signature NamedTuple example",
-    )
+    assert inspector.passed()
 
 
 @pytest.mark.parametrize(
