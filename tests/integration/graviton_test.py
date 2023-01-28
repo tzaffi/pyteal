@@ -24,8 +24,7 @@ FIXTURES = PATH / "teal"
 GENERATED = PATH / "generated"
 
 # TODO: remove these skips after the following issue has been fixed https://github.com/algorand/pyteal/issues/199
-STABLE_SLOT_GENERATION = False
-SKIP_SCRATCH_ASSERTIONS = not STABLE_SLOT_GENERATION
+SKIP_SCRATCH_ASSERTIONS = True
 
 # ---- Helper ---- #
 
@@ -134,11 +133,12 @@ def fib(n):
 # ---- Blackbox pure unit tests (Skipping for now due to flakiness) ---- #
 
 
-@pytest.mark.skipif(not STABLE_SLOT_GENERATION, reason="cf. #199")
+ISSUE_199_CASES = [exp, square_byref, square, swap, string_mult, oldfac, slow_fibonacci]
+@pytest.mark.skipif(SKIP_SCRATCH_ASSERTIONS, reason="cf. #199")
 @pytest.mark.parametrize(
     "subr, mode",
     product(
-        [exp, square_byref, square, swap, string_mult, oldfac, slow_fibonacci],
+        ISSUE_199_CASES,
         [pt.Mode.Application, pt.Mode.Signature],
     ),
 )

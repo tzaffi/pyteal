@@ -1,28 +1,28 @@
 #pragma version 6
 byte "hello"
-store 0                   //  0: "hello"
+store 0
 int 0
-int 42                    //  >@0,42
-callsub logcatdynamic_0   //  <<EMPTY>>
-byte "hello42"            //  >"hello42"
-load 0                    //  >"hello42","hello42"
-==                        //  >1
-assert                    //  <<EMPTY>>
-int 1                     //  >1
-return                    //  <<SUCCESS>
+int 42
+callsub logcatdynamic_0
+byte "hello42"
+load 0
+==
+assert
+int 1
+return
 
 // logcat_dynamic
-logcatdynamic_0:          //  >@0,42
-store 2                   //  2: 42
-store 1                   //  1: @0
+logcatdynamic_0:
+store 2
+store 1
 load 1
-load 1                    //  >@0,@0
-loads                     //  >@0,"hello"
-load 2                    //  >@0,"hello",42
-itob                      //  >@0,"hello","42"
-concat                    //  >@0,"hello42"
-stores                    //  0: "hello42"
-load 1                    //  >@0
-loads                     //  >"hello42"
-log                     
+load 1
+loads
+load 2
+itob
+concat
+stores
+load 1
+loads
+log
 retsub
