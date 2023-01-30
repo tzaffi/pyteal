@@ -22,26 +22,26 @@ return
 
 // swap
 swap_0:
-store 3
 store 2
-load 2
+store 3
+load 3
 loads
 store 4
-load 2
 load 3
+load 2
 loads
 stores
-load 3
+load 2
 load 4
 stores
 retsub
 
 // cat
 cat_1:
-store 6
 store 5
-load 5
+store 6
 load 6
+load 5
 concat
 pop
 retsub

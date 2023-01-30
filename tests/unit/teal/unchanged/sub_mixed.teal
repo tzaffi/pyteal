@@ -7,18 +7,18 @@ return
 
 // mixed_annotations
 mixedannotations_0:
-store 3
-store 2
 store 1
-load 3
+store 2
+store 3
 load 1
+load 3
 stores
 load 2
 byte "="
 concat
-load 1
+load 3
 itob
 concat
 log
-load 1
+load 3
 retsub

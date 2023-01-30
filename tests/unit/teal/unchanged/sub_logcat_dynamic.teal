@@ -13,16 +13,16 @@ return
 
 // logcat_dynamic
 logcatdynamic_0:
-store 2
 store 1
-load 1
-load 1
-loads
+store 2
 load 2
+load 2
+loads
+load 1
 itob
 concat
 stores
-load 1
+load 2
 loads
 log
 retsub

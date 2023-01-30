@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+import threading
+import time
 from typing import Dict, Final, List, Optional, Set, Tuple, cast
 
 from algosdk.v2client.algod import AlgodClient
@@ -297,6 +299,10 @@ class _FullCompilationBundle:
 
 
 class Compilation:
+    ready_to_unpause_lock: threading.Lock = threading.Lock()
+    ready_to_unpause: int = 0
+    paused: bool = True
+
     def __init__(
         self,
         ast: Expr,
@@ -419,6 +425,11 @@ class Compilation:
             )
             for start in subroutine_start_blocks.values():
                 apply_global_optimizations(start, options.optimize, self.version)
+        
+        with self.ready_to_unpause_lock:
+            self.ready_to_unpause += 1
+        while self.paused:
+            time.sleep(0.1)
 
         localSlotAssignments: Dict[
             Optional[SubroutineDefinition], Set[int]

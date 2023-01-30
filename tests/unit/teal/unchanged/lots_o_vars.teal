@@ -120,9 +120,9 @@ txna ApplicationArgs 1
 store 14
 txna ApplicationArgs 2
 btoi
-store 6
+store 4
 txna ApplicationArgs 3
-store 7
+store 5
 load 0
 pop
 load 1
@@ -160,25 +160,25 @@ byte "twelve"
 app_global_get
 pop
 int 13
-store 4
-load 4
+store 6
+load 6
 loads
 itob
 log
 int 14
-store 5
-load 5
+store 7
+load 7
 loads
 log
-int 6
-store 4
-load 4
+int 4
+store 6
+load 6
 loads
 itob
 log
-int 7
-store 5
-load 5
+int 5
+store 7
+load 7
 loads
 log
 int 1337
