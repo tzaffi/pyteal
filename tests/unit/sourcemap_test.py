@@ -5,12 +5,12 @@ blacklist, we need to move the test elsewhere to get reliable results.
 """
 
 import ast
+import difflib
 import json
 import time
 from configparser import ConfigParser
 from pathlib import Path
 from unittest import mock
-
 import pytest
 
 from pyteal.compiler.sourcemap import R3SourceMap, R3SourceMapJSON
@@ -18,7 +18,6 @@ from pyteal.compiler.sourcemap import R3SourceMap, R3SourceMapJSON
 ALGOBANK = Path.cwd() / "examples" / "application" / "abi"
 
 
-@pytest.mark.serial
 def test_frames():
     from pyteal.stack_frame import NatalStackFrame
 
@@ -49,7 +48,6 @@ def test_frames():
     NatalStackFrame._no_stackframes = originally
 
 
-@pytest.mark.serial
 def test_TealMapItem_source_mapping():
     from pyteal.stack_frame import NatalStackFrame
 
@@ -107,7 +105,7 @@ def test_TealMapItem_source_mapping():
     NatalStackFrame._no_stackframes = originally
 
 
-def no_regressions():
+def no_regressions(skip_final_assertion=False):
     from examples.application.abi.algobank import router
     from pyteal import OptimizeOptions
 
@@ -115,24 +113,25 @@ def no_regressions():
         version=6, optimize=OptimizeOptions(scratch_slots=True)
     )
 
-    def compare_and_assert(file, actual):
+    def compare_and_assert(file, actual, skip_final_assertion):
         with open(ALGOBANK / file, "r") as f:
             expected_lines = f.read().splitlines()
             actual_lines = actual.splitlines()
             assert len(expected_lines) == len(actual_lines)
-            assert expected_lines == actual_lines
+            if not skip_final_assertion:
+                assert expected_lines == actual_lines
 
-    compare_and_assert("algobank.json", json.dumps(contract.dictify(), indent=4))
-    compare_and_assert("algobank_clear_state.teal", clear)
-    compare_and_assert("algobank_approval.teal", approval)
+            return expected_lines, actual_lines
+
+    compare_and_assert("algobank.json", json.dumps(contract.dictify(), indent=4), False)
+    compare_and_assert("algobank_clear_state.teal", clear, False)
+    return compare_and_assert("algobank_approval.teal", approval, skip_final_assertion)
 
 
-@pytest.mark.serial
 def test_no_regression_with_sourcemap_as_configured():
     no_regressions()
 
 
-@pytest.mark.serial
 def test_no_regression_with_sourcemap_enabled():
     from pyteal.stack_frame import NatalStackFrame
 
@@ -144,7 +143,6 @@ def test_no_regression_with_sourcemap_enabled():
     NatalStackFrame._no_stackframes = originally
 
 
-@pytest.mark.serial
 def test_no_regression_with_sourcemap_disabled():
     from pyteal.stack_frame import NatalStackFrame
 
@@ -156,7 +154,6 @@ def test_no_regression_with_sourcemap_disabled():
     NatalStackFrame._no_stackframes = originally
 
 
-@pytest.mark.serial
 def test_sourcemap_fails_because_unconfigured():
     from examples.application.abi.algobank import router
     from pyteal import OptimizeOptions
@@ -172,7 +169,6 @@ def test_sourcemap_fails_because_unconfigured():
     assert "pyteal.ini" in str(smde.value)
 
 
-@pytest.mark.serial
 def test_config():
     from pyteal.stack_frame import NatalStackFrame
 
@@ -208,30 +204,41 @@ def test_config():
     NatalStackFrame._no_stackframes = originally
 
 
-@pytest.mark.skip(
-    reason="""Supressing this flaky test as 
-router_test::test_router_compile_program_idempotence is similar in its goals
-and we expect flakiness to persist until https://github.com/algorand/pyteal/issues/199
-is finally addressed """
-)
-@pytest.mark.serial
 def test_idempotent():
     # make sure we get clean up properly and therefore get idempotent results
     from examples.application.abi.algobank import router
     from pyteal import OptimizeOptions
 
-    approval1, clear1, contract1 = (
+    def assert_same_results(first_compilation, second_compilation):
+        approval1, clear1, contract1 = first_compilation
+        approval2, clear2, contract2 = second_compilation
+
+        assert contract1.dictify() == contract2.dictify()
+
+        assert len(clear1.splitlines()) == len(clear2.splitlines())
+        assert clear1 == clear2
+
+        assert len(a1 := approval1.splitlines()) == len(a2 := approval2.splitlines())
+        print(
+            '----------unified_diff(a1, a2, "approval1.teal", "approval2.teal")----------'
+        )
+        for d in list(difflib.unified_diff(a1, a2, "approval1.teal", "approval2.teal")):
+            print(d)
+
+        assert approval1 == approval2
+
+    compilation_1 = (
         func := lambda: router.compile_program(
             version=6, optimize=OptimizeOptions(scratch_slots=True)
         )
     )()
-    approval2, clear2, contract2 = func()
+    compilation_2 = func()
+    compilation_3 = func()
+    compilation_4 = func()
 
-    assert contract1.dictify() == contract2.dictify()
-    assert len(clear1.splitlines()) == len(clear2.splitlines())
-    assert clear1 == clear2
-    assert len(approval1.splitlines()) == len(approval2.splitlines())
-    assert approval1 == approval2
+    assert_same_results(compilation_1, compilation_4)
+    assert_same_results(compilation_1, compilation_3)
+    assert_same_results(compilation_1, compilation_2)
 
 
 # ---- BENCHMARKS - SKIPPED BY DEFAULT ---- #
@@ -343,3 +350,85 @@ keep_one_frame_only: bool = True,
     trial(annotated_teal)
 
     assert False
+
+
+def multi_compile(N, comp, sync=True):
+    import asyncio
+    from itertools import groupby
+
+    async def compile(teals: list[str], idx: int):
+        teals[idx] = comp()
+
+    teals = [""] * N
+
+    async def main():
+        # Use asyncio.gather to execute multiple foo() concurrently
+        await asyncio.gather(*(compile(teals, idx) for idx in range(N)))
+
+    if sync:
+        for idx in range(N):
+            teals[idx] = comp()
+    else:
+        asyncio.run(main())
+
+    teals_gb = list(groupby(teals))
+    assert len(teals_gb) >= 2  # this is provably "bad"
+
+    return teals_gb
+
+
+from pyteal import compileTeal, Mode
+from examples.signature.factorizer_game import logicsig
+
+
+def lsig345():
+    return compileTeal(logicsig(3, 4, 5), Mode.Signature, version=7)
+
+
+from examples.application.abi.algobank import router
+
+
+def algobank():
+    from pyteal import OptimizeOptions
+
+    no_regressions()
+
+    return router.compile_program(
+        version=6, optimize=OptimizeOptions(scratch_slots=True)
+    )[0]
+
+
+@pytest.mark.parametrize("expr", [lsig345, algobank])
+def test_multithreaded_compilation(expr):
+    from functools import reduce
+
+    N = 100
+
+    teals_gb = multi_compile(N, expr)
+
+    t1, t2 = [t.splitlines() for t, _ in teals_gb[:2]]
+
+    pairs = list(zip(t1, t2))
+    diffs = [(i, x, y) for i, (x, y) in enumerate(pairs) if x != y]
+
+    def op(x):
+        return x.split()[0]
+
+    assert all(op(d[1]) == op(d[2]) for d in diffs)
+
+    def slot(x):
+        return int(x.split()[1])
+
+    maps = [(i, slot(x), {slot(y)}) for i, x, y in diffs]
+
+    def dict_append(d, t):
+        d[k] = (d[k] | t[2]) if (k := t[1]) in d else t[2]
+        return d
+
+    unified = reduce(
+        dict_append,
+        maps,
+        dict(),
+    )
+
+    assert all(len(v) == 1 for v in unified.values())

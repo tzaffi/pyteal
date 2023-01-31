@@ -100,7 +100,7 @@ def spillLocalSlotsDuringRecursion(
 
     "Spill to stack" means loading all local slots onto the stack, invoking the subroutine which may
     result in recursion, then restoring all local slots from the stack. This prevents the local
-    slots from being modifying by a new recursive invocation of the current subroutine.
+    slots from being modified by a new recursive invocation of the current subroutine.
 
     Args:
         version: The current program version being assembled.

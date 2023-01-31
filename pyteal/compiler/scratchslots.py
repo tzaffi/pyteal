@@ -40,7 +40,8 @@ def collect_unoptimized_slots(
 
 
 def collectScratchSlots(
-    subroutineBlocks: Dict[Optional[SubroutineDefinition], TealBlock]
+    subroutineBlocks: Dict[Optional[SubroutineDefinition], TealBlock],
+    starting_cid: int | None = None,
 ) -> Tuple[Set[ScratchSlot], Dict[Optional[SubroutineDefinition], Set[ScratchSlot]]]:
     """Find and return all referenced ScratchSlots for each subroutine.
 
@@ -53,6 +54,20 @@ def collectScratchSlots(
             same as subroutineBlocks, and whose values are the local slots of that
             subroutine.
     """
+    cid: int | None = starting_cid
+    assert cid is None or cid >= 0, f"negative id not allowed but {starting_cid=}"
+
+    def incrementing() -> bool:
+        nonlocal cid
+        return cid is not None
+
+    def next_cid() -> int:
+        nonlocal cid
+        if not incrementing():
+            return -1
+        curr = cid
+        cid += 1
+        return curr
 
     subroutineSlots: Dict[Optional[SubroutineDefinition], Set[ScratchSlot]] = dict()
 
@@ -60,6 +75,9 @@ def collectScratchSlots(
         for op in block.ops:
             for slot in op.getSlots():
                 slots.add(slot)
+                if slot._cid is None and (nid := next_cid()) >= 0:
+                    slot._cid = nid
+                    
 
     for subroutine, start in subroutineBlocks.items():
         slots: Set[ScratchSlot] = set()
@@ -107,7 +125,9 @@ def assignScratchSlotsToSubroutines(
         integers representing the assigned IDs of slots which appear only in that subroutine
         (subroutine local slots).
     """
-    global_slots, local_slots = collectScratchSlots(subroutineBlocks)
+    from pyteal import ScratchSlot
+
+    global_slots, local_slots = collectScratchSlots(subroutineBlocks, starting_cid=0)
     # all scratch slots referenced by the program
     allSlots: Set[ScratchSlot] = global_slots | cast(Set[ScratchSlot], set()).union(
         *local_slots.values()
@@ -146,7 +166,11 @@ def assignScratchSlotsToSubroutines(
             raise TealInternalError(msg) from errors[0]
 
     nextSlotIndex = 0
-    for slot in sorted(allSlots, key=lambda slot: slot.id):
+    # sorted_slots = sorted(allSlots, key=lambda slot: slot._cid)
+    sorted_slots = sorted(allSlots, key=lambda slot: slot.id)
+    x = 42
+    print(f"\n{ScratchSlot.nextSlotId=}")
+    for slot in sorted_slots:
         # Find next vacant slot that compiler can assign to
         while nextSlotIndex in slotIds:
             nextSlotIndex += 1

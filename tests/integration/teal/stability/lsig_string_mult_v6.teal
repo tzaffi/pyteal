@@ -1,45 +1,41 @@
 #pragma version 6
 intcblock 1
-txna ApplicationArgs 0
-store 1
-intc_0 // 1
-txna ApplicationArgs 1
+arg 0
+store 0
+pushint 0 // 0
+arg 1
 btoi
 callsub stringmult_0
-store 0
-load 0
-log
-load 0
 len
 return
 
 // string_mult
 stringmult_0:
-store 3
+store 1
 store 2
 intc_0 // 1
-store 4
+store 3
 load 2
 loads
-store 5
+store 4
 load 2
 pushbytes 0x // ""
 stores
 stringmult_0_l1:
-load 4
 load 3
+load 1
 <=
 bz stringmult_0_l3
 load 2
 load 2
 loads
-load 5
+load 4
 concat
 stores
-load 4
+load 3
 intc_0 // 1
 +
-store 4
+store 3
 b stringmult_0_l1
 stringmult_0_l3:
 load 2

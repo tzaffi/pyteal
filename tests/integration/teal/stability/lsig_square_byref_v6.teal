@@ -1,19 +1,19 @@
 #pragma version 6
 arg 0
 btoi
-store 1
-pushint 1 // 1
+store 0
+pushint 0 // 0
 callsub squarebyref_0
 pushint 1337 // 1337
 return
 
 // square_byref
 squarebyref_0:
-store 0
-load 0
-load 0
+store 1
+load 1
+load 1
 loads
-load 0
+load 1
 loads
 *
 stores

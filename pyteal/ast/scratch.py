@@ -1,5 +1,7 @@
 from typing import cast, TYPE_CHECKING
 
+import traceback  # TODO: this is temporary!!!
+
 from pyteal.types import TealType, require_type
 from pyteal.config import NUM_SLOTS
 from pyteal.errors import TealInputError, TealInternalError
@@ -28,6 +30,30 @@ class ScratchSlot:
             requestedSlotId (optional): A scratch slot id that the compiler must store the value.
                 This id may be a Python int in the range [0-256).
         """
+        # Compilation ID:
+        self._cid: int | None = None
+        # Temporary:
+        tb = traceback.extract_stack()
+
+        pt_indices = [i + 1 for i, b in enumerate(reversed(tb)) if "/pyteal/" in b[0]]
+        self.creator_tb_idx = max(pt_indices)
+
+        def back(n):
+            filename, line_number, function_name, _ = tb[-n]
+            return {
+                "loc": f"{filename}:{line_number}:",
+                "function_name": function_name,
+            }
+
+        self.creator = back(self.creator_tb_idx)
+
+        def breadcrumb(n):
+            return back(n)["loc"].split("/")[-1]
+
+        self.breadcrumbs = [
+            breadcrumb(i) for i in range(self.creator_tb_idx, 0, -1)
+        ]
+
         if requestedSlotId is None:
             self.id = ScratchSlot.nextSlotId
             ScratchSlot.nextSlotId += 1
@@ -71,7 +97,14 @@ class ScratchSlot:
         return "ScratchSlot({})".format(self.id)
 
     def __str__(self):
-        return "slot#{}".format(self.id)
+        code = "?"
+        if (bc := self.breadcrumbs[1]) == 'router.py:1099:':
+            code = "C"
+        elif bc == 'router.py:1095:':
+            code = "B"
+        arrows = "-".join(x.split(":")[1] for x in self.breadcrumbs)
+        pid = hash(arrows)
+        return "({}{})slot#{}:{}".format(code, pid, self.id, arrows)
 
 
 ScratchSlot.__module__ = "pyteal"
