@@ -714,7 +714,7 @@ class _PyTealSourceMapper:
             self._most_recent_omit_headers = oh
 
     def get_sourcemap(self, teal_for_validation: str) -> PyTealSourceMap:
-        if not self._built():
+        if not self._built:
             raise self._unexpected_error("source map not built yet")
 
         if self._annotated_teal:
@@ -734,9 +734,11 @@ class _PyTealSourceMapper:
             self._annotated_teal,
         )
 
+    @property
     def compiled_teal(self) -> str:
         return "\n".join(self.teal_chunks)
 
+    @property
     def _built(self) -> bool:
         """
         If any portion of source map is missing, re-build it from scratch
@@ -757,7 +759,7 @@ class _PyTealSourceMapper:
         )
 
     def build(self) -> None:
-        if self._built():
+        if self._built:
             return
 
         if self.include_pcs:
@@ -891,7 +893,7 @@ class _PyTealSourceMapper:
         algod = algod_with_assertion(
             self.algod, msg="Adding PC's to sourcemap requires live Algod"
         )
-        algod_compilation = algod.compile(self.compiled_teal(), source_map=True)
+        algod_compilation = algod.compile(self.compiled_teal, source_map=True)
         raw_sourcemap = algod_compilation.get("sourcemap")
         if not raw_sourcemap:
             raise TealInternalError(
@@ -1123,7 +1125,7 @@ class _PyTealSourceMapper:
         return tabulate(rows, **calling_kwargs)
 
     def annotated_teal(self, omit_headers: bool = True, concise: bool = True) -> str:
-        if not self._built():
+        if not self._built:
             raise ValueError(
                 "not ready for annotated_teal() because build() has yet to be called"
             )
