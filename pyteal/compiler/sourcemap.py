@@ -426,7 +426,7 @@ _TEAL_LINE = "Teal Line"
 _PROGRAM_COUNTERS = "PC"
 _PYTEAL_HYBRID_UNPARSED = "PyTeal Hybrid Unparsed"
 _PYTEAL_NODE_AST_UNPARSED = "PyTeal AST Unparsed"
-_PYTEAL_NODE_AST_QUALNAME = "PyTeal Qualname"
+# _PYTEAL_NODE_AST_QUALNAME = "PyTeal Qualname"
 _PYTEAL_COMPONENT = "PyTeal Qualname"
 _PYTEAL_NODE_AST_SOURCE_BOUNDARIES = "PT Window"
 _PYTEAL_FILENAME = "PT path"
@@ -502,7 +502,7 @@ class TealMapItem(PyTealFrame):
         _PROGRAM_COUNTERS: lambda tmi: tmi.pcs_repr(),
         _PYTEAL_HYBRID_UNPARSED: lambda tmi: tmi.hybrid_unparsed(),
         _PYTEAL_NODE_AST_UNPARSED: lambda tmi: tmi.node_source(),
-        _PYTEAL_NODE_AST_QUALNAME: lambda tmi: tmi.code_qualname(),
+        # _PYTEAL_NODE_AST_QUALNAME: lambda tmi: tmi.code_qualname(),
         _PYTEAL_COMPONENT: lambda tmi: tmi.teal_component,
         _PYTEAL_NODE_AST_SOURCE_BOUNDARIES: lambda tmi: tmi.node_source_window(),
         _PYTEAL_FILENAME: lambda tmi: tmi.file(),
@@ -1001,7 +1001,7 @@ WARNING: Source mapping is unknown for the following:
         teal_column_end=_TEAL_COLUMN_END,
         program_counters=_PROGRAM_COUNTERS,
         pyteal_component=_PYTEAL_COMPONENT,
-        pyteal_node_ast_qualname=_PYTEAL_NODE_AST_QUALNAME,
+        # pyteal_node_ast_qualname=_PYTEAL_NODE_AST_QUALNAME,
         pyteal_filename=_PYTEAL_FILENAME,
         pyteal_line_number=_PYTEAL_LINE_NUMBER,
         pyteal_line_number_end=_PYTEAL_LINE_NUMBER_END,

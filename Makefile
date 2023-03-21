@@ -126,3 +126,15 @@ coverage:
 
 sourcemap-coverage:
 	pytest --cov-report html --cov=pyteal.stack_frame --cov=pyteal.compiler.sourcemap --cov=pyteal.compiler.compiler --dist=no tests/unit/sourcemap_monkey_unit_test.py -m serial
+
+
+# ---- TEMP ---- #
+time-unit-slow: 
+	time pytest --durations=3 tests/unit/sourcemap_constructs_allpy_test.py -m serial
+
+V = $(shell python -c "import sys; print(sys.version_info.minor)")
+profile-unit-slow:
+	time python -m cProfile -o profile_$(V) -m pytest --durations=3 tests/unit/sourcemap_constructs_allpy_test.py -m serial
+
+profile-read:
+	time python -m read_profile # | grep -vE '(pytest|pluggy|runpy|builtins|tests/unit)' | head -n 100
